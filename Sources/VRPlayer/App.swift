@@ -119,6 +119,28 @@ struct PlayerScreen: View {
     @State private var reset = 0
     @State private var dropTargeted = false
 
+    @State private var keyMonitor: Any?
+
+    private func installSeekKeys() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let flags = event.modifierFlags
+            guard let window = event.window, window.isKeyWindow, window.attachedSheet == nil,
+                  !(window is NSPanel), NSApp.modalWindow == nil, playback.duration > 0,
+                  !flags.contains(.command), !flags.contains(.control),
+                  event.keyCode == 123 || event.keyCode == 124 else { return event }
+            let interval: Double
+            switch (flags.contains(.shift), flags.contains(.option)) {
+            case (true, true): interval = 180
+            case (false, true): interval = 60
+            case (true, false): interval = 30
+            default: interval = 5
+            }
+            playback.seek(to: playback.position + (event.keyCode == 123 ? -interval : interval))
+            return nil
+        }
+    }
+
     private func timestamp(_ seconds: Double) -> String {
         let total = Int(seconds)
         if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, total / 60 % 60, total % 60) }
@@ -187,6 +209,11 @@ struct PlayerScreen: View {
         .onChange(of: playback.currentURL) { _ in reset += 1 }
         .onAppear {
             NSApp.activate(ignoringOtherApps: true)
+            installSeekKeys()
+        }
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
         }
         .alert("재생 오류", isPresented: Binding(get: { playback.error != nil }, set: { if !$0 { playback.error = nil } })) {
             Button("확인") { playback.error = nil }
