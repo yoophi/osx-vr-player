@@ -76,6 +76,12 @@ final class Playback: ObservableObject {
         }
     }
 
+    func neighbor(_ offset: Int) -> URL? {
+        guard let currentURL, let index = playlist.firstIndex(of: currentURL),
+              playlist.indices.contains(index + offset) else { return nil }
+        return playlist[index + offset]
+    }
+
     func play(_ url: URL) {
         currentURL = url
         position = 0
@@ -96,9 +102,8 @@ final class Playback: ObservableObject {
         })
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak item] _ in
-            guard let self, self.player.currentItem === item, let index = self.playlist.firstIndex(of: url),
-                  self.playlist.indices.contains(index + 1) else { return }
-            self.play(self.playlist[index + 1])
+            guard let self, self.player.currentItem === item, let next = self.neighbor(1) else { return }
+            self.play(next)
         }
         output = frames
         fileName = url.lastPathComponent
@@ -148,54 +153,17 @@ struct PlayerScreen: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                VideoSurface(playback: playback, rightEye: rightEye, reset: reset)
-                if playback.fileName.isEmpty {
-                    Text("VR180 동영상이나 폴더를 이 창에 끌어다 놓으세요.")
-                        .foregroundStyle(.white).allowsHitTesting(false)
-                }
+        ZStack {
+            VideoSurface(playback: playback, rightEye: rightEye, reset: reset)
+            if playback.fileName.isEmpty {
+                Text("VR180 동영상이나 폴더를 이 창에 끌어다 놓으세요.")
+                    .foregroundStyle(.white).allowsHitTesting(false)
             }
-            HStack {
-                Text(timestamp(playback.position))
-                Slider(value: Binding(get: { playback.position }, set: { playback.seek(to: $0) }),
-                       in: 0...max(playback.duration, 0.001)) { Text("재생 위치") }
-                    .disabled(playback.duration <= 0)
-                Text(timestamp(playback.duration))
-            }.monospacedDigit().padding(.horizontal, 10).padding(.top, 6)
-            HStack {
-                Button("열기…") {
-                    let panel = NSOpenPanel()
-                    panel.canChooseDirectories = true
-                    panel.allowedContentTypes = [.movie]
-                    if panel.runModal() == .OK, let url = panel.url {
-                        playback.open(url)
-                    }
-                }.keyboardShortcut("o")
-                Button(playback.playing ? "일시정지" : "재생") { playback.toggle() }
-                    .disabled(playback.fileName.isEmpty)
-                if let current = playback.currentURL {
-                    Menu {
-                        ForEach(playback.playlist, id: \.self) { url in
-                            Button {
-                                playback.play(url)
-                            } label: {
-                                if url == current { Label(url.lastPathComponent, systemImage: "checkmark") }
-                                else { Text(url.lastPathComponent) }
-                            }
-                        }
-                    } label: {
-                        Text(current.lastPathComponent).lineLimit(1).truncationMode(.middle)
-                    }.help("플레이리스트")
-                }
-                Spacer()
-                Picker("표시할 눈", selection: $rightEye) {
-                    Text("왼쪽").tag(false)
-                    Text("오른쪽").tag(true)
-                }.pickerStyle(.segmented).fixedSize()
-                Button("시점 초기화") { reset += 1 }
-            }.padding(10)
-        }.frame(minWidth: 620, minHeight: 360)
+        }
+        .overlay(alignment: .bottom) {
+            controls.padding(12)
+        }
+        .frame(minWidth: 620, minHeight: 360)
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first(where: { $0.isFileURL }) else { return false }
             playback.open(url)
@@ -218,5 +186,71 @@ struct PlayerScreen: View {
         .alert("재생 오류", isPresented: Binding(get: { playback.error != nil }, set: { if !$0 { playback.error = nil } })) {
             Button("확인") { playback.error = nil }
         } message: { Text(playback.error ?? "") }
+    }
+
+    private func neighborButton(_ offset: Int, title: String, symbol: String) -> some View {
+        let file = playback.neighbor(offset)
+        return Button {
+            if let file { playback.play(file) }
+        } label: {
+            Label(title, systemImage: symbol)
+        }
+        .labelStyle(.iconOnly)
+        .help(title)
+        .disabled(file == nil)
+    }
+
+    private var controls: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(timestamp(playback.position))
+                Slider(value: Binding(get: { playback.position }, set: { playback.seek(to: $0) }),
+                       in: 0...max(playback.duration, 0.001)) { Text("재생 위치") }
+                    .disabled(playback.duration <= 0)
+                Text(timestamp(playback.duration))
+            }.monospacedDigit()
+            HStack {
+                Button("열기…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.allowedContentTypes = [.movie]
+                    if panel.runModal() == .OK, let url = panel.url {
+                        playback.open(url)
+                    }
+                }.keyboardShortcut("o")
+                neighborButton(-1, title: "이전 파일", symbol: "backward.end.fill")
+                Button { playback.toggle() } label: {
+                    Label(playback.playing ? "일시정지" : "재생",
+                          systemImage: playback.playing ? "pause.fill" : "play.fill")
+                }
+                .labelStyle(.iconOnly)
+                .help(playback.playing ? "일시정지" : "재생")
+                .disabled(playback.currentURL == nil)
+                neighborButton(1, title: "다음 파일", symbol: "forward.end.fill")
+                if let current = playback.currentURL {
+                    Menu {
+                        ForEach(playback.playlist, id: \.self) { url in
+                            Button {
+                                playback.play(url)
+                            } label: {
+                                if url == current { Label(url.lastPathComponent, systemImage: "checkmark") }
+                                else { Text(url.lastPathComponent) }
+                            }
+                        }
+                    } label: {
+                        Text(current.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                    }.help("플레이리스트")
+                }
+                Spacer()
+                Picker("표시할 눈", selection: $rightEye) {
+                    Text("왼쪽").tag(false)
+                    Text("오른쪽").tag(true)
+                }.pickerStyle(.segmented).fixedSize()
+                Button("시점 초기화") { reset += 1 }
+            }
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .environment(\.colorScheme, .dark)
     }
 }
