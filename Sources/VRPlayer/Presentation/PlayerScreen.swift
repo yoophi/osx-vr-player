@@ -1,0 +1,163 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import PlayerCore
+
+struct PlayerScreen: View {
+    @ObservedObject var presentation: PlayerPresentation
+    private var playback: PlaybackSession { presentation.session }
+    private var state: PlaybackState { playback.state }
+    @State private var rightEye = false
+    @State private var reset = 0
+    @State private var dropTargeted = false
+
+    @State private var keyMonitor: Any?
+
+    private func installPlayerKeys() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let flags = event.modifierFlags
+            guard let window = event.window, window.isKeyWindow, window.attachedSheet == nil,
+                  !(window is NSPanel), NSApp.modalWindow == nil,
+                  !flags.contains(.command), !flags.contains(.control) else { return event }
+            if [36, 76, 53].contains(event.keyCode) {
+                guard !flags.contains(.option), !flags.contains(.shift) else { return event }
+                guard !event.isARepeat else { return nil }
+                if event.keyCode != 53 {
+                    guard state.currentURL != nil else { return event }
+                    window.toggleFullScreen(nil)
+                } else if window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                } else if state.currentURL == nil {
+                    NSApp.terminate(nil)
+                } else if state.stopped {
+                    playback.close()
+                } else {
+                    playback.stop()
+                }
+                return nil
+            }
+            guard state.duration > 0,
+                  event.keyCode == 123 || event.keyCode == 124 else { return event }
+            let interval: Double
+            switch (flags.contains(.shift), flags.contains(.option)) {
+            case (true, true): interval = 180
+            case (false, true): interval = 60
+            case (true, false): interval = 30
+            default: interval = 5
+            }
+            playback.seek(to: state.position + (event.keyCode == 123 ? -interval : interval))
+            return nil
+        }
+    }
+
+    private func timestamp(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, total / 60 % 60, total % 60) }
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    var body: some View {
+        ZStack {
+            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, reset: reset)
+            if state.currentURL == nil {
+                Text("VR180 동영상이나 폴더를 이 창에 끌어다 놓으세요.")
+                    .foregroundStyle(.white).allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            controls.padding(12)
+        }
+        .frame(minWidth: 620, minHeight: 360)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.isFileURL }) else { return false }
+            playback.open(url)
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .overlay {
+            if dropTargeted {
+                Rectangle().strokeBorder(Color.accentColor, lineWidth: 3).allowsHitTesting(false)
+            }
+        }
+        .onOpenURL { url in
+            if url.isFileURL { playback.open(url) }
+        }
+        .onChange(of: state.currentURL) { _ in reset += 1 }
+        .onAppear {
+            NSApp.activate(ignoringOtherApps: true)
+            installPlayerKeys()
+        }
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
+        }
+        .alert("재생 오류", isPresented: Binding(get: { state.error != nil }, set: { if !$0 { playback.setError(nil) } })) {
+            Button("확인") { playback.setError(nil) }
+        } message: { Text(state.error ?? "") }
+    }
+
+    private func neighborButton(_ offset: Int, title: String, symbol: String) -> some View {
+        let file = state.neighbor(offset)
+        return Button {
+            if let file { playback.play(file) }
+        } label: {
+            Label(title, systemImage: symbol)
+        }
+        .labelStyle(.iconOnly)
+        .help(title)
+        .disabled(file == nil)
+    }
+
+    private var controls: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(timestamp(state.position))
+                Slider(value: Binding(get: { state.position }, set: { playback.seek(to: $0) }),
+                       in: 0...max(state.duration, 0.001)) { Text("재생 위치") }
+                    .disabled(state.duration <= 0)
+                Text(timestamp(state.duration))
+            }.monospacedDigit()
+            HStack {
+                Button("열기…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.allowedContentTypes = [.movie]
+                    if panel.runModal() == .OK, let url = panel.url {
+                        playback.open(url)
+                    }
+                }.keyboardShortcut("o")
+                neighborButton(-1, title: "이전 파일", symbol: "backward.end.fill")
+                Button { playback.toggle() } label: {
+                    Label(state.playing ? "일시정지" : "재생",
+                          systemImage: state.playing ? "pause.fill" : "play.fill")
+                }
+                .labelStyle(.iconOnly)
+                .help(state.playing ? "일시정지" : "재생")
+                .disabled(state.currentURL == nil)
+                neighborButton(1, title: "다음 파일", symbol: "forward.end.fill")
+                if let current = state.currentURL {
+                    Menu {
+                        ForEach(state.playlist, id: \.self) { url in
+                            Button {
+                                playback.play(url)
+                            } label: {
+                                if url == current { Label(url.lastPathComponent, systemImage: "checkmark") }
+                                else { Text(url.lastPathComponent) }
+                            }
+                        }
+                    } label: {
+                        Text(current.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                    }.help("플레이리스트")
+                }
+                Spacer()
+                Picker("표시할 눈", selection: $rightEye) {
+                    Text("왼쪽").tag(false)
+                    Text("오른쪽").tag(true)
+                }.pickerStyle(.segmented).fixedSize()
+                Button("시점 초기화") { reset += 1 }
+            }
+        }
+        .padding(10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .environment(\.colorScheme, .dark)
+    }
+}

@@ -2,11 +2,16 @@ import AVFoundation
 import MetalKit
 import SwiftUI
 
+protocol VideoFrameSource: AnyObject {
+    var output: AVPlayerItemVideoOutput? { get }
+}
+
 struct VideoSurface: NSViewRepresentable {
-    let playback: Playback
+    let frames: VideoFrameSource
+    let onError: (String) -> Void
     let rightEye: Bool
     let reset: Int
-    func makeNSView(context: Context) -> PanoramaView { PanoramaView(playback: playback) }
+    func makeNSView(context: Context) -> PanoramaView { PanoramaView(frames: frames, onError: onError) }
     func updateNSView(_ view: PanoramaView, context: Context) {
         view.rightEye = rightEye
         if view.reset != reset {
@@ -17,7 +22,7 @@ struct VideoSurface: NSViewRepresentable {
 }
 
 final class PanoramaView: MTKView {
-    let playback: Playback
+    let frames: VideoFrameSource
     var angles = SIMD2<Float>.zero
     var reset = 0
     var rightEye = false
@@ -27,8 +32,8 @@ final class PanoramaView: MTKView {
     private var frameTexture: CVMetalTexture?
     private var previousOutput: AVPlayerItemVideoOutput?
 
-    init(playback: Playback) {
-        self.playback = playback
+    init(frames: VideoFrameSource, onError: @escaping (String) -> Void) {
+        self.frames = frames
         super.init(frame: .zero, device: MTLCreateSystemDefaultDevice())
         clearColor = MTLClearColorMake(0, 0, 0, 1)
         do {
@@ -44,7 +49,7 @@ final class PanoramaView: MTKView {
                 throw RenderError.unavailable
             }
         } catch {
-            DispatchQueue.main.async { playback.error = error.localizedDescription }
+            DispatchQueue.main.async { onError(error.localizedDescription) }
         }
     }
     required init(coder: NSCoder) { fatalError("Unsupported initializer") }
@@ -55,9 +60,9 @@ final class PanoramaView: MTKView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if previousOutput !== playback.output {
+        if previousOutput !== frames.output {
             frameTexture = nil
-            previousOutput = playback.output
+            previousOutput = frames.output
         }
         if let output = previousOutput, let cache {
             let time = output.itemTime(forHostTime: CACurrentMediaTime())

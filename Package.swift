@@ -2,5 +2,7 @@
 import PackageDescription
 
 let package = Package(name: "VRPlayer", platforms: [.macOS(.v13)], targets: [
-    .executableTarget(name: "VRPlayer")
+    .target(name: "PlayerCore"),
+    .executableTarget(name: "VRPlayer", dependencies: ["PlayerCore"]),
+    .testTarget(name: "PlayerCoreTests", dependencies: ["PlayerCore"])
 ])
