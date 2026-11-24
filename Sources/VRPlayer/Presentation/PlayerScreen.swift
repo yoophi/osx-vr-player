@@ -140,6 +140,18 @@ struct PlayerScreen: View {
         .disabled(file == nil)
     }
 
+    private func eyeButton(right: Bool) -> some View {
+        let selected = rightEye == right
+        let title = right ? "오른쪽 눈 표시" : "왼쪽 눈 표시"
+        let symbol = right ? "r.circle" : "l.circle"
+        return Button { rightEye = right } label: {
+            Label(title, systemImage: selected ? symbol + ".fill" : symbol)
+        }
+        .labelStyle(.iconOnly)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .help(title)
+    }
+
     private var controls: some View {
         VStack(spacing: 6) {
             HStack {
@@ -202,11 +214,15 @@ struct PlayerScreen: View {
                     }.help("플레이리스트")
                 }
                 Spacer()
-                Picker("표시할 눈", selection: $rightEye) {
-                    Text("왼쪽").tag(false)
-                    Text("오른쪽").tag(true)
-                }.pickerStyle(.segmented).fixedSize()
-                Button("시점 초기화") { reset += 1 }
+                HStack(spacing: 2) {
+                    eyeButton(right: false)
+                    eyeButton(right: true)
+                }
+                Button { reset += 1 } label: {
+                    Label("시점 초기화", systemImage: "scope")
+                }
+                .labelStyle(.iconOnly)
+                .help("시점 초기화")
             }
         }
         .padding(10)
