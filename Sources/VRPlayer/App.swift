@@ -55,6 +55,7 @@ struct PlayerScreen: View {
     @StateObject private var playback = Playback()
     @State private var rightEye = false
     @State private var reset = 0
+    @State private var dropTargeted = false
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
@@ -84,6 +85,17 @@ struct PlayerScreen: View {
                 Button("시점 초기화") { reset += 1 }
             }.padding(10)
         }.frame(minWidth: 620, minHeight: 360)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.isFileURL && UTType(filenameExtension: $0.pathExtension)?.conforms(to: .movie) == true }) else { return false }
+            reset += 1
+            playback.open(url)
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .overlay {
+            if dropTargeted {
+                Rectangle().strokeBorder(Color.accentColor, lineWidth: 3).allowsHitTesting(false)
+            }
+        }
         .onAppear { NSApp.activate(ignoringOtherApps: true) }
         .alert("재생 오류", isPresented: Binding(get: { playback.error != nil }, set: { if !$0 { playback.error = nil } })) {
             Button("확인") { playback.error = nil }
