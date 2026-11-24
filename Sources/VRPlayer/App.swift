@@ -22,6 +22,7 @@ final class Playback: ObservableObject {
     @Published private(set) var duration = 0.0
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private(set) var stopped = false
     private var pendingSeek: UUID?
     private var observations: [NSKeyValueObservation] = []
 
@@ -65,6 +66,7 @@ final class Playback: ObservableObject {
 
     func seek(to seconds: Double) {
         guard duration > 0, seconds.isFinite else { return }
+        stopped = false
         let target = max(0, min(seconds, duration))
         let request = UUID()
         pendingSeek = request
@@ -83,6 +85,7 @@ final class Playback: ObservableObject {
     }
 
     func play(_ url: URL) {
+        stopped = false
         currentURL = url
         position = 0
         duration = 0
@@ -111,7 +114,30 @@ final class Playback: ObservableObject {
         player.play()
     }
 
+    func stop() {
+        player.pause()
+        seek(to: 0)
+        stopped = true
+    }
+
+    func close() {
+        player.pause()
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+        observations = Array(observations.prefix(1))
+        player.replaceCurrentItem(with: nil)
+        output = nil
+        pendingSeek = nil
+        currentURL = nil
+        fileName = ""
+        playlist = []
+        position = 0
+        duration = 0
+        stopped = false
+    }
+
     func toggle() {
+        stopped = false
         if playing { player.pause(); return }
         if let item = player.currentItem, item.currentTime() >= item.duration { player.seek(to: .zero) }
         player.play()
@@ -126,13 +152,31 @@ struct PlayerScreen: View {
 
     @State private var keyMonitor: Any?
 
-    private func installSeekKeys() {
+    private func installPlayerKeys() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let flags = event.modifierFlags
             guard let window = event.window, window.isKeyWindow, window.attachedSheet == nil,
-                  !(window is NSPanel), NSApp.modalWindow == nil, playback.duration > 0,
-                  !flags.contains(.command), !flags.contains(.control),
+                  !(window is NSPanel), NSApp.modalWindow == nil,
+                  !flags.contains(.command), !flags.contains(.control) else { return event }
+            if [36, 76, 53].contains(event.keyCode) {
+                guard !flags.contains(.option), !flags.contains(.shift) else { return event }
+                guard !event.isARepeat else { return nil }
+                if event.keyCode != 53 {
+                    guard playback.currentURL != nil else { return event }
+                    window.toggleFullScreen(nil)
+                } else if window.styleMask.contains(.fullScreen) {
+                    window.toggleFullScreen(nil)
+                } else if playback.currentURL == nil {
+                    NSApp.terminate(nil)
+                } else if playback.stopped {
+                    playback.close()
+                } else {
+                    playback.stop()
+                }
+                return nil
+            }
+            guard playback.duration > 0,
                   event.keyCode == 123 || event.keyCode == 124 else { return event }
             let interval: Double
             switch (flags.contains(.shift), flags.contains(.option)) {
@@ -180,7 +224,7 @@ struct PlayerScreen: View {
         .onChange(of: playback.currentURL) { _ in reset += 1 }
         .onAppear {
             NSApp.activate(ignoringOtherApps: true)
-            installSeekKeys()
+            installPlayerKeys()
         }
         .onDisappear {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
