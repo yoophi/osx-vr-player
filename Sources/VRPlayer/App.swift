@@ -18,16 +18,28 @@ final class Playback: ObservableObject {
     @Published var error: String?
     @Published private(set) var playlist: [URL] = []
     @Published private(set) var currentURL: URL?
+    @Published private(set) var position = 0.0
+    @Published private(set) var duration = 0.0
+    private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var pendingSeek: UUID?
     private var observations: [NSKeyValueObservation] = []
 
     init() {
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 4), queue: .main) { [weak self] _ in
+            guard let self, let item = self.player.currentItem else { return }
+            let length = item.duration.seconds
+            if length.isFinite && length > 0 { self.duration = length }
+            let current = item.currentTime().seconds
+            if self.pendingSeek == nil && current.isFinite { self.position = max(0, min(current, self.duration)) }
+        }
         observations.append(player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
             DispatchQueue.main.async { self?.playing = player.timeControlStatus != .paused }
         })
     }
 
     deinit {
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
     }
 
@@ -51,8 +63,24 @@ final class Playback: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
+    func seek(to seconds: Double) {
+        guard duration > 0, seconds.isFinite else { return }
+        let target = max(0, min(seconds, duration))
+        let request = UUID()
+        pendingSeek = request
+        position = target
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                if self?.pendingSeek == request { self?.pendingSeek = nil }
+            }
+        }
+    }
+
     func play(_ url: URL) {
         currentURL = url
+        position = 0
+        duration = 0
+        pendingSeek = nil
         let item = AVPlayerItem(url: url)
         let frames = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -91,6 +119,12 @@ struct PlayerScreen: View {
     @State private var reset = 0
     @State private var dropTargeted = false
 
+    private func timestamp(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, total / 60 % 60, total % 60) }
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
@@ -100,6 +134,13 @@ struct PlayerScreen: View {
                         .foregroundStyle(.white).allowsHitTesting(false)
                 }
             }
+            HStack {
+                Text(timestamp(playback.position))
+                Slider(value: Binding(get: { playback.position }, set: { playback.seek(to: $0) }),
+                       in: 0...max(playback.duration, 0.001)) { Text("재생 위치") }
+                    .disabled(playback.duration <= 0)
+                Text(timestamp(playback.duration))
+            }.monospacedDigit().padding(.horizontal, 10).padding(.top, 6)
             HStack {
                 Button("열기…") {
                     let panel = NSOpenPanel()
