@@ -14,6 +14,12 @@ public enum PanoramaProjection {
                        y: CGFloat(asin(min(1, max(-1, y))) / .pi + 0.5))
     }
 
+    /// Exponential damping halves the angular error every 120 ms, independent of refresh rate.
+    public static func follow(from current: SIMD2<Float>, toward target: SIMD2<Float>, elapsed: Double) -> SIMD2<Float> {
+        let fraction = 1 - exp2(-min(max(elapsed, 0), 0.1) / 0.12)
+        return current + (target - current) * Float(fraction)
+    }
+
     public static func angles(centeredOn box: CGRect) -> SIMD2<Float> {
         SIMD2(Float(box.midX - 0.5) * .pi, Float(box.midY - 0.5) * .pi)
     }

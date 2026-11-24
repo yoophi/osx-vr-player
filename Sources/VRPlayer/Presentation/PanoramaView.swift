@@ -12,7 +12,7 @@ struct VideoSurface: NSViewRepresentable {
     let frames: VideoFrameSource
     let onError: (String) -> Void
     let rightEye: Bool
-    let detectFaces: Bool
+    let trackingMode: TrackingMode
     let reset: Int
     let zoom: Double
     let onZoom: (Double) -> Void
@@ -20,10 +20,10 @@ struct VideoSurface: NSViewRepresentable {
     func updateNSView(_ view: PanoramaView, context: Context) {
         view.zoom = Float(zoom)
         view.onZoom = onZoom
-        if view.detectFaces != detectFaces || view.rightEye != rightEye || view.reset != reset {
+        if view.rightEye != rightEye || view.reset != reset {
             view.faceOverlay.reset()
         }
-        view.detectFaces = detectFaces
+        view.trackingMode = trackingMode
         view.rightEye = rightEye
         if view.reset != reset {
             view.angles = .zero
@@ -39,7 +39,13 @@ final class PanoramaView: MTKView {
     var onZoom: ((Double) -> Void)?
     var reset = 0
     var rightEye = false
-    var detectFaces = false
+    var trackingMode = TrackingMode.off {
+        didSet {
+            if trackingMode == .off && oldValue != .off { faceOverlay.reset() }
+        }
+    }
+    private var displayedTime = 0.0
+    private var lastDrawTime = CACurrentMediaTime()
     let faceOverlay = FaceOverlay()
     private var displayedBuffer: CVPixelBuffer?
     private var frameNumber: UInt64 = 0
@@ -81,18 +87,18 @@ final class PanoramaView: MTKView {
     override func mouseDown(with event: NSEvent) { dragged = false }
 
     override func mouseUp(with event: NSEvent) {
-        guard detectFaces, !dragged, bounds.width > 0, bounds.height > 0 else { return }
+        guard trackingMode != .off, !dragged, bounds.width > 0, bounds.height > 0 else { return }
         let location = convert(event.locationInWindow, from: nil)
         let x = Float(2 * (location.x - bounds.minX) / bounds.width - 1)
         let y = Float(2 * (location.y - bounds.minY) / bounds.height - 1)
         if let point = PanoramaProjection.eyePoint(screen: SIMD2(x, isFlipped ? -y : y),
                                 aspect: Float(bounds.width / bounds.height), zoom: zoom, angles: angles) {
-            faceOverlay.select(at: point)
+            faceOverlay.select(at: point, allowRegion: trackingMode == .hidden)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if !dragged && detectFaces { faceOverlay.reset() }
+        if !dragged && trackingMode != .off { faceOverlay.reset() }
         dragged = true
         let scale = Float.pi / Float(max(bounds.height, 1)) * 0.5 / zoom
         angles.x = max(-.pi/2, min(.pi/2, angles.x - Float(event.deltaX) * scale))
@@ -109,21 +115,26 @@ final class PanoramaView: MTKView {
         }
         if let output = previousOutput, let cache {
             let time = output.itemTime(forHostTime: CACurrentMediaTime())
+            var displayTime = CMTime.invalid
             if output.hasNewPixelBuffer(forItemTime: time),
-               let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
+               let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime) {
                 var texture: CVMetalTexture?
                 if CVMetalTextureCacheCreateTextureFromImage(nil, cache, buffer, nil, .bgra8Unorm,
                     CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer), 0, &texture) == kCVReturnSuccess {
                     frameTexture = texture
+                    displayedTime = displayTime.seconds.isFinite ? displayTime.seconds : time.seconds
                     displayedBuffer = buffer
                     frameNumber &+= 1
                 }
             }
         }
-        if detectFaces, let displayedBuffer {
-            faceOverlay.update(buffer: displayedBuffer, frame: frameNumber, rightEye: rightEye)
+        let now = CACurrentMediaTime()
+        let elapsed = now - lastDrawTime
+        lastDrawTime = now
+        if trackingMode != .off, let displayedBuffer {
+            faceOverlay.update(buffer: displayedBuffer, frame: frameNumber, time: displayedTime, rightEye: rightEye)
             if let box = faceOverlay.tracked {
-                angles = PanoramaProjection.angles(centeredOn: box)
+                angles = PanoramaProjection.follow(from: angles, toward: PanoramaProjection.angles(centeredOn: box), elapsed: elapsed)
             }
         }
         guard let command = queue?.makeCommandBuffer(), let pass = currentRenderPassDescriptor,
@@ -135,7 +146,7 @@ final class PanoramaView: MTKView {
             encoder.setFragmentBytes(&params, length: MemoryLayout.size(ofValue: params), index: 0)
             var focalLength = zoom
             encoder.setFragmentBytes(&focalLength, length: MemoryLayout<Float>.size, index: 1)
-            var faceCounts = faceOverlay.counts
+            var faceCounts = trackingMode == .outlines ? faceOverlay.counts : SIMD2<UInt32>(0, .max)
             faceOverlay.rectangles.withUnsafeBufferPointer {
                 encoder.setFragmentBytes($0.baseAddress!, length: $0.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
             }

@@ -8,7 +8,7 @@ final class FaceOverlay {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private var analyzer = VisionFaceAnalyzer()
     private var analysis: FaceAnalysis?
-    private var selection: (CGRect, CGImage)?
+    private var selection: (box: CGRect, frame: FaceAnalysis, isFace: Bool)?
     private var busy = false
     private var generation = 0
     private var lastFrame: UInt64?
@@ -39,20 +39,24 @@ final class FaceOverlay {
         lastFrame = nil
     }
 
-    func select(at point: CGPoint) {
-        guard let analysis, let face = faces.filter({ $0.contains(point) }).min(by: {
+    func select(at point: CGPoint, allowRegion: Bool) {
+        guard let analysis else { return }
+        let face = faces.filter({ $0.contains(point) }).min(by: {
             $0.width * $0.height < $1.width * $1.height
-        }) else { return }
+        })
+        guard face != nil || allowRegion else { return }
+        let box = face ?? CGRect(x: min(0.92, max(0, point.x - 0.04)),
+                                 y: min(0.92, max(0, point.y - 0.04)), width: 0.08, height: 0.08)
         generation &+= 1
         analyzer = VisionFaceAnalyzer()
-        selection = (face, analysis.image)
-        tracked = face
+        selection = (box, analysis, face != nil)
+        tracked = box
         updateOutlines()
         nextUpdate = 0
         lastFrame = nil
     }
 
-    func update(buffer: CVPixelBuffer, frame: UInt64, rightEye: Bool) {
+    func update(buffer: CVPixelBuffer, frame: UInt64, time: Double, rightEye: Bool) {
         let now = CACurrentMediaTime()
         guard !busy, frame != lastFrame, now >= nextUpdate else { return }
         busy = true
@@ -63,8 +67,8 @@ final class FaceOverlay {
         queue.async { [weak self, analyzer, generation, context] in
             let result: FaceAnalysis?
             do {
-                if let (box, image) = seed { try analyzer.select(box, in: image) }
-                result = try analyzer.analyze(buffer, rightEye: rightEye, context: context)
+                if let seed { try analyzer.select(seed.box, in: seed.frame, isFace: seed.isFace) }
+                result = try analyzer.analyze(buffer, rightEye: rightEye, time: time, context: context)
             } catch { result = nil }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -73,7 +77,7 @@ final class FaceOverlay {
                 self.analysis = result
                 self.tracked = result?.tracked
                 self.updateOutlines()
-                if result == nil { self.analyzer = VisionFaceAnalyzer() }
+
             }
         }
     }
