@@ -11,8 +11,12 @@ struct VideoSurface: NSViewRepresentable {
     let onError: (String) -> Void
     let rightEye: Bool
     let reset: Int
+    let zoom: Double
+    let onZoom: (Double) -> Void
     func makeNSView(context: Context) -> PanoramaView { PanoramaView(frames: frames, onError: onError) }
     func updateNSView(_ view: PanoramaView, context: Context) {
+        view.zoom = Float(zoom)
+        view.onZoom = onZoom
         view.rightEye = rightEye
         if view.reset != reset {
             view.angles = .zero
@@ -24,6 +28,8 @@ struct VideoSurface: NSViewRepresentable {
 final class PanoramaView: MTKView {
     let frames: VideoFrameSource
     var angles = SIMD2<Float>.zero
+    var zoom: Float = 1
+    var onZoom: ((Double) -> Void)?
     var reset = 0
     var rightEye = false
     private var queue: MTLCommandQueue?
@@ -53,8 +59,14 @@ final class PanoramaView: MTKView {
         }
     }
     required init(coder: NSCoder) { fatalError("Unsupported initializer") }
+    override func scrollWheel(with event: NSEvent) {
+        let direction: Double = event.isDirectionInvertedFromDevice ? -1 : 1
+        let steps = event.scrollingDeltaY / (event.hasPreciseScrollingDeltas ? 40 : 1)
+        onZoom?(direction * steps)
+    }
+
     override func mouseDragged(with event: NSEvent) {
-        let scale = Float.pi / Float(max(bounds.height, 1)) * 0.5
+        let scale = Float.pi / Float(max(bounds.height, 1)) * 0.5 / zoom
         angles.x = max(-.pi/2, min(.pi/2, angles.x - Float(event.deltaX) * scale))
         angles.y = max(-.pi/2, min(.pi/2, angles.y + Float(event.deltaY) * scale))
     }
@@ -82,6 +94,8 @@ final class PanoramaView: MTKView {
             encoder.setRenderPipelineState(pipeline)
             encoder.setFragmentTexture(texture, index: 0)
             encoder.setFragmentBytes(&params, length: MemoryLayout.size(ofValue: params), index: 0)
+            var focalLength = zoom
+            encoder.setFragmentBytes(&focalLength, length: MemoryLayout<Float>.size, index: 1)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             command.addCompletedHandler { _ in withExtendedLifetime(frameTexture) {} }
         }
@@ -103,8 +117,8 @@ final class PanoramaView: MTKView {
         return {float4(p, 0, 1), p};
     }
     fragment float4 panorama(Vertex v [[stage_in]], texture2d<float> frame [[texture(0)]],
-                             constant float4 &params [[buffer(0)]]) {
-        float3 d = normalize(float3(v.screen.x * params.z, v.screen.y, 1));
+                             constant float4 &params [[buffer(0)]], constant float &zoom [[buffer(1)]]) {
+        float3 d = normalize(float3(v.screen.x * params.z, v.screen.y, zoom));
         float cp = cos(params.y), sp = sin(params.y);
         d.yz = float2(cp*d.y + sp*d.z, -sp*d.y + cp*d.z);
         float cy = cos(params.x), sy = sin(params.x);

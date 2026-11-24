@@ -6,12 +6,18 @@ struct PlayerScreen: View {
     @ObservedObject var presentation: PlayerPresentation
     private var playback: PlaybackSession { presentation.session }
     private var state: PlaybackState { playback.state }
+    @State private var zoom = 1.0
     @State private var rightEye = false
     @State private var reset = 0
     @State private var dropTargeted = false
 
     @State private var showsVolume = false
     @State private var keyMonitor: Any?
+
+    private func adjustZoom(steps: Double) {
+        guard state.currentURL != nil, steps.isFinite else { return }
+        zoom = min(4, max(0.5, zoom * pow(1.2, steps)))
+    }
 
     private func installPlayerKeys() {
         guard keyMonitor == nil else { return }
@@ -21,6 +27,14 @@ struct PlayerScreen: View {
                   !(window is NSPanel), NSApp.modalWindow == nil,
                   !flags.contains(.command), !flags.contains(.control) else { return event }
             if showsVolume { return event }
+            if state.currentURL != nil, !flags.contains(.option) {
+                switch event.characters {
+                case "+", "=": adjustZoom(steps: 1); return nil
+                case "-": adjustZoom(steps: -1); return nil
+                case "0": zoom = 1; return nil
+                default: break
+                }
+            }
             if [36, 76, 53].contains(event.keyCode) {
                 guard !flags.contains(.option), !flags.contains(.shift) else { return event }
                 guard !event.isARepeat else { return nil }
@@ -60,10 +74,18 @@ struct PlayerScreen: View {
 
     var body: some View {
         ZStack {
-            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, reset: reset)
+            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, reset: reset, zoom: zoom, onZoom: adjustZoom)
             if state.currentURL == nil {
                 Text("VR180 동영상이나 폴더를 이 창에 끌어다 놓으세요.")
                     .foregroundStyle(.white).allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if zoom != 1 {
+                Text(zoom, format: .percent.precision(.fractionLength(0)))
+                    .monospacedDigit().padding(6)
+                    .background(.regularMaterial, in: Capsule()).padding(12)
+                    .allowsHitTesting(false)
             }
         }
         .overlay(alignment: .bottom) {
@@ -83,7 +105,10 @@ struct PlayerScreen: View {
         .onOpenURL { url in
             if url.isFileURL { playback.open(url) }
         }
-        .onChange(of: state.currentURL) { _ in reset += 1 }
+        .onChange(of: state.currentURL) { _ in
+            reset += 1
+            zoom = 1
+        }
         .onAppear {
             NSApp.activate(ignoringOtherApps: true)
             installPlayerKeys()
