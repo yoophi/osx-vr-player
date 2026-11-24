@@ -72,6 +72,11 @@ struct PlayerScreen: View {
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
+    private var windowTitle: String {
+        guard let url = state.currentURL else { return "VR180 Player" }
+        return url.pathComponents.suffix(2).joined(separator: "/").replacingOccurrences(of: "//", with: "/")
+    }
+
     var body: some View {
         ZStack {
             VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, reset: reset, zoom: zoom, onZoom: adjustZoom)
@@ -92,6 +97,7 @@ struct PlayerScreen: View {
             controls.padding(12)
         }
         .frame(minWidth: 620, minHeight: 360)
+        .navigationTitle(windowTitle)
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first(where: { $0.isFileURL }) else { return false }
             playback.open(url)
