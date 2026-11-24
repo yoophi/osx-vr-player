@@ -174,6 +174,9 @@ struct PlayerScreen: View {
                 Rectangle().strokeBorder(Color.accentColor, lineWidth: 3).allowsHitTesting(false)
             }
         }
+        .onOpenURL { url in
+            if url.isFileURL { playback.open(url) }
+        }
         .onChange(of: playback.currentURL) { _ in reset += 1 }
         .onAppear {
             NSApp.activate(ignoringOtherApps: true)
