@@ -28,6 +28,10 @@ struct PlayerScreen: View {
                   !flags.contains(.command), !flags.contains(.control) else { return event }
             if showsVolume { return event }
             if state.currentURL != nil, !flags.contains(.option) {
+                if !flags.contains(.shift), [29, 82].contains(event.keyCode) {
+                    zoom = 1
+                    return nil
+                }
                 switch event.characters {
                 case "+", "=": adjustZoom(steps: 1); return nil
                 case "-": adjustZoom(steps: -1); return nil
