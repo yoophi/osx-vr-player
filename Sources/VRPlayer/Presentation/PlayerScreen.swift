@@ -7,6 +7,7 @@ struct PlayerScreen: View {
     private var playback: PlaybackSession { presentation.session }
     private var state: PlaybackState { playback.state }
     @State private var zoom = 1.0
+    @State private var detectFaces = false
     @State private var rightEye = false
     @State private var reset = 0
     @State private var dropTargeted = false
@@ -83,7 +84,7 @@ struct PlayerScreen: View {
 
     var body: some View {
         ZStack {
-            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, reset: reset, zoom: zoom, onZoom: adjustZoom)
+            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, detectFaces: detectFaces, reset: reset, zoom: zoom, onZoom: adjustZoom)
             if state.currentURL == nil {
                 Text("VR180 동영상이나 폴더를 이 창에 끌어다 놓으세요.")
                     .foregroundStyle(.white).allowsHitTesting(false)
@@ -218,6 +219,12 @@ struct PlayerScreen: View {
                     }.help("플레이리스트")
                 }
                 Spacer()
+                Toggle(isOn: $detectFaces) {
+                    Label("얼굴 인식", systemImage: "viewfinder.circle")
+                }
+                .toggleStyle(.button)
+                .labelStyle(.iconOnly)
+                .help("얼굴 테두리 표시 · 얼굴을 클릭해 추적")
                 HStack(spacing: 2) {
                     eyeButton(right: false)
                     eyeButton(right: true)

@@ -1,0 +1,22 @@
+import CoreGraphics
+import XCTest
+import PlayerCore
+
+final class PanoramaProjectionTests: XCTestCase {
+    func testCenterTracksFaceInNormalizedEyeSpaceAtAnyZoom() throws {
+        let box = CGRect(x: 0.67, y: 0.21, width: 0.12, height: 0.2)
+        let angles = PanoramaProjection.angles(centeredOn: box)
+        for zoom: Float in [0.5, 1, 4] {
+            let hit = try XCTUnwrap(PanoramaProjection.eyePoint(screen: .zero, aspect: 1.6, zoom: zoom, angles: angles))
+            XCTAssertEqual(hit.x, box.midX, accuracy: 0.0001)
+            XCTAssertEqual(hit.y, box.midY, accuracy: 0.0001)
+        }
+    }
+
+    func testClickProjectionUsesAspectAndRejectsBackOfHemisphere() throws {
+        let point = try XCTUnwrap(PanoramaProjection.eyePoint(screen: SIMD2(0.5, 0), aspect: 2, zoom: 1, angles: .zero))
+        XCTAssertEqual(point.x, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(point.y, 0.5, accuracy: 0.0001)
+        XCTAssertNil(PanoramaProjection.eyePoint(screen: SIMD2(1, 0), aspect: 2, zoom: 1, angles: SIMD2(.pi/2, 0)))
+    }
+}

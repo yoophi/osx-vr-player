@@ -11,6 +11,7 @@ final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
         get { player.isMuted }
         set { player.isMuted = newValue }
     }
+    private(set) var seekRevision = 0
     private(set) var output: AVPlayerItemVideoOutput?
     var onEvent: ((PlaybackEvent) -> Void)?
     private var timeObserver: Any?
@@ -63,6 +64,7 @@ final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
     func pause() { player.pause() }
 
     func seek(to seconds: Double, completion: @escaping () -> Void) {
+        seekRevision &+= 1
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { _ in
             DispatchQueue.main.async { completion() }
         }
