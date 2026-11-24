@@ -3,6 +3,8 @@ import PlayerCore
 
 private final class TestEngine: PlaybackEngine {
     var onEvent: ((PlaybackEvent) -> Void)?
+    var volume = 1.0
+    var isMuted = false
     var loaded: URL?
     var target: Double?
     var completeSeek: (() -> Void)?
@@ -54,6 +56,23 @@ final class PlaybackSessionTests: XCTestCase {
         session.open(library.folder.appendingPathComponent("notes.txt"))
         XCTAssertNotNil(session.state.error)
         XCTAssertEqual(engine.loaded, library.files[2])
+    }
+
+    func testMutePreservesVolumeAcrossFileChanges() {
+        let session = PlaybackSession(engine: engine, library: library)
+        session.setVolume(0.35)
+        session.toggleMute()
+        session.open(library.folder)
+        session.close()
+        XCTAssertTrue(engine.isMuted)
+        XCTAssertEqual(engine.volume, 0.35)
+        session.toggleMute()
+        XCTAssertFalse(engine.isMuted)
+        XCTAssertEqual(session.volume, 0.35)
+        session.setVolume(2)
+        XCTAssertEqual(engine.volume, 1)
+        session.setVolume(-1)
+        XCTAssertEqual(engine.volume, 0)
     }
 
     func testPendingSeeksStopAndClose() {

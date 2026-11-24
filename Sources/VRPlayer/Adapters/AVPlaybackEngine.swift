@@ -3,6 +3,14 @@ import PlayerCore
 
 final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
     private let player = AVPlayer()
+    var volume: Double {
+        get { Double(player.volume) }
+        set { player.volume = Float(newValue) }
+    }
+    var isMuted: Bool {
+        get { player.isMuted }
+        set { player.isMuted = newValue }
+    }
     private(set) var output: AVPlayerItemVideoOutput?
     var onEvent: ((PlaybackEvent) -> Void)?
     private var timeObserver: Any?

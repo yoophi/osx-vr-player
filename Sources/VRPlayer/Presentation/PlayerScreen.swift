@@ -10,6 +10,7 @@ struct PlayerScreen: View {
     @State private var reset = 0
     @State private var dropTargeted = false
 
+    @State private var showsVolume = false
     @State private var keyMonitor: Any?
 
     private func installPlayerKeys() {
@@ -19,6 +20,7 @@ struct PlayerScreen: View {
             guard let window = event.window, window.isKeyWindow, window.attachedSheet == nil,
                   !(window is NSPanel), NSApp.modalWindow == nil,
                   !flags.contains(.command), !flags.contains(.control) else { return event }
+            if showsVolume { return event }
             if [36, 76, 53].contains(event.keyCode) {
                 guard !flags.contains(.option), !flags.contains(.shift) else { return event }
                 guard !event.isARepeat else { return nil }
@@ -134,6 +136,26 @@ struct PlayerScreen: View {
                 .help(state.playing ? "일시정지" : "재생")
                 .disabled(state.currentURL == nil)
                 neighborButton(1, title: "다음 파일", symbol: "forward.end.fill")
+                Button { showsVolume.toggle() } label: {
+                    Label("볼륨", systemImage: "speaker.wave.2.fill")
+                }
+                .labelStyle(.iconOnly)
+                .help("볼륨 조절")
+                .popover(isPresented: $showsVolume, arrowEdge: .bottom) {
+                    VStack {
+                        Text(playback.volume, format: .percent.precision(.fractionLength(0)))
+                            .monospacedDigit()
+                        VolumeSlider(value: playback.volume, onChange: playback.setVolume)
+                            .frame(width: 24, height: 110)
+                    }.padding(12)
+                }
+                Button { playback.toggleMute() } label: {
+                    Label(playback.isMuted ? "음소거 해제" : "음소거", systemImage: "speaker.slash.fill")
+                }
+                .labelStyle(.iconOnly)
+                .tint(playback.isMuted ? Color.accentColor : nil)
+                .accessibilityValue(playback.isMuted ? "켜짐" : "꺼짐")
+                .help(playback.isMuted ? "음소거 해제" : "음소거")
                 if let current = state.currentURL {
                     Menu {
                         ForEach(state.playlist, id: \.self) { url in

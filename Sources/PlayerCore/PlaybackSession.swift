@@ -16,6 +16,8 @@ public enum PlaybackEvent {
 
 public protocol PlaybackEngine: AnyObject {
     var onEvent: ((PlaybackEvent) -> Void)? { get set }
+    var volume: Double { get set }
+    var isMuted: Bool { get set }
     func load(_ url: URL)
     func resume()
     func pause()
@@ -97,6 +99,20 @@ public final class PlaybackSession {
         engine.seek(to: target) { [weak self] in
             if self?.pendingSeek == request { self?.pendingSeek = nil }
         }
+    }
+
+    public var volume: Double { engine.volume }
+    public var isMuted: Bool { engine.isMuted }
+
+    public func setVolume(_ level: Double) {
+        guard level.isFinite else { return }
+        engine.volume = min(1, max(0, level))
+        onChange?()
+    }
+
+    public func toggleMute() {
+        engine.isMuted.toggle()
+        onChange?()
     }
 
     public func toggle() {
