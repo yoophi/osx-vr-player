@@ -54,6 +54,8 @@ final class PanoramaView: MTKView {
     private var frameNumber: UInt64 = 0
     private var seekRevision = 0
     private var dragged = false
+    private var focusRay = SIMD3<Float>(0, 0, 1)
+    private var lastKnownFace: CGRect?
     private var queue: MTLCommandQueue?
     private var pipeline: MTLRenderPipelineState?
     private var cache: CVMetalTextureCache?
@@ -135,12 +137,20 @@ final class PanoramaView: MTKView {
     override func mouseDown(with event: NSEvent) { dragged = false }
 
     override func mouseUp(with event: NSEvent) {
-        guard trackingEnabled, !dragged else { return }
+        if dragged {
+            dragged = false
+            if faceOverlay.hasSelection, let box = faceOverlay.tracked ?? lastKnownFace {
+                focusRay = PanoramaProjection.cameraRay(to: box, from: angles)
+            }
+            return
+        }
+        guard trackingEnabled else { return }
+        focusRay = SIMD3(0, 0, 1)
+        lastKnownFace = nil
         faceOverlay.toggleSelection(at: eyePoint(at: convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if !dragged && trackingEnabled { faceOverlay.reset() }
         dragged = true
         let scale = Float.pi / Float(max(bounds.height, 1)) * 0.5 / zoom
         angles.x = max(-.pi/2, min(.pi/2, angles.x - Float(event.deltaX) * scale))
@@ -176,7 +186,11 @@ final class PanoramaView: MTKView {
         if trackingEnabled, let displayedBuffer {
             faceOverlay.update(buffer: displayedBuffer, frame: frameNumber, time: displayedTime, rightEye: rightEye)
             if let box = faceOverlay.tracked {
-                angles = PanoramaProjection.follow(from: angles, toward: PanoramaProjection.angles(centeredOn: box), elapsed: elapsed)
+                lastKnownFace = box
+                if !dragged {
+                    let target = PanoramaProjection.trackingAngles(for: box, ray: focusRay, current: angles)
+                    angles = PanoramaProjection.follow(from: angles, toward: target, elapsed: elapsed)
+                }
             }
         }
         guard let command = queue?.makeCommandBuffer(), let pass = currentRenderPassDescriptor,
