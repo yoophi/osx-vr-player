@@ -147,6 +147,7 @@ final class PanoramaView: MTKView {
         guard trackingEnabled else { return }
         focusRay = SIMD3(0, 0, 1)
         lastKnownFace = nil
+        hoveredFace = nil
         faceOverlay.toggleSelection(at: eyePoint(at: convert(event.locationInWindow, from: nil)))
     }
 
@@ -204,6 +205,8 @@ final class PanoramaView: MTKView {
             encoder.setFragmentBytes(&focalLength, length: MemoryLayout<Float>.size, index: 1)
             var hoverBox = outline(at: now)
             encoder.setFragmentBytes(&hoverBox, length: MemoryLayout.size(ofValue: hoverBox), index: 2)
+            var focused: UInt32 = hoveredFace != nil && hoveredFace == faceOverlay.tracked ? 1 : 0
+            encoder.setFragmentBytes(&focused, length: MemoryLayout<UInt32>.size, index: 3)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             command.addCompletedHandler { _ in withExtendedLifetime(frameTexture) {} }
         }
@@ -226,7 +229,7 @@ final class PanoramaView: MTKView {
     }
     fragment float4 panorama(Vertex v [[stage_in]], texture2d<float> frame [[texture(0)]],
                              constant float4 &params [[buffer(0)]], constant float &zoom [[buffer(1)]],
-                             constant float4 &box [[buffer(2)]]) {
+                             constant float4 &box [[buffer(2)]], constant uint &focused [[buffer(3)]]) {
         float3 d = normalize(float3(v.screen.x * params.z, v.screen.y, zoom));
         float cp = cos(params.y), sp = sin(params.y);
         d.yz = float2(cp*d.y + sp*d.z, -sp*d.y + cp*d.z);
@@ -243,7 +246,8 @@ final class PanoramaView: MTKView {
         if (box.z > box.x) {
             float2 edge = min(point - box.xy, box.zw - point) / pixel;
             if (all(edge >= 0) && min(edge.x, edge.y) <= 2) {
-                color.rgb = mix(color.rgb, float3(0.1, 0.5, 1), 0.95);
+                float3 tint = focused != 0 ? float3(0.15, 1, 0.3) : float3(0.1, 0.5, 1);
+                color.rgb = mix(color.rgb, tint, 0.95);
             }
         }
         return color;
