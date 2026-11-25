@@ -14,6 +14,8 @@ final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
     private(set) var seekRevision = 0
     private(set) var output: AVPlayerItemVideoOutput?
     var onEvent: ((PlaybackEvent) -> Void)?
+    private var pendingLoad: Task<Void, Never>?
+    private var shouldPlayWhenReady = false
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var statusObserver: NSKeyValueObservation?
@@ -25,17 +27,38 @@ final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
             self.onEvent?(.timeline(position: item.currentTime().seconds, duration: item.duration.seconds))
         }
         statusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
-            DispatchQueue.main.async { self?.onEvent?(.playing(player.timeControlStatus != .paused)) }
+            DispatchQueue.main.async {
+                guard let self, self.pendingLoad == nil else { return }
+                self.onEvent?(.playing(player.timeControlStatus != .paused))
+            }
         }
     }
 
     deinit {
+        pendingLoad?.cancel()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
     }
 
     func load(_ url: URL) {
-        let item = AVPlayerItem(url: url)
+        close()
+        pendingLoad = Task { @MainActor [weak self] in
+            do {
+                let asset = try await PlaybackAsset.open(url)
+                guard !Task.isCancelled, let self else { return }
+                self.pendingLoad = nil
+                self.install(AVPlayerItem(asset: asset))
+                if self.shouldPlayWhenReady { self.player.play() }
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.pendingLoad = nil
+                self.onEvent?(.playing(false))
+                self.onEvent?(.failed(error.localizedDescription))
+            }
+        }
+    }
+
+    private func install(_ item: AVPlayerItem) {
         let frames = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferMetalCompatibilityKey as String: true
@@ -57,11 +80,17 @@ final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
     }
 
     func resume() {
+        shouldPlayWhenReady = true
+        if pendingLoad != nil { onEvent?(.playing(true)); return }
         if let item = player.currentItem, item.currentTime() >= item.duration { player.seek(to: .zero) }
         player.play()
     }
 
-    func pause() { player.pause() }
+    func pause() {
+        shouldPlayWhenReady = false
+        player.pause()
+        if pendingLoad != nil { onEvent?(.playing(false)) }
+    }
 
     func seek(to seconds: Double, completion: @escaping () -> Void) {
         seekRevision &+= 1
@@ -71,6 +100,9 @@ final class AVPlaybackEngine: PlaybackEngine, VideoFrameSource {
     }
 
     func close() {
+        pendingLoad?.cancel()
+        pendingLoad = nil
+        shouldPlayWhenReady = false
         player.pause()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
