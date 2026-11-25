@@ -7,7 +7,7 @@ struct PlayerScreen: View {
     private var playback: PlaybackSession { presentation.session }
     private var state: PlaybackState { playback.state }
     @State private var zoom = 1.0
-    @State private var trackingMode = TrackingMode.off
+    @State private var trackingEnabled = false
     @State private var rightEye = false
     @State private var reset = 0
     @State private var dropTargeted = false
@@ -84,7 +84,7 @@ struct PlayerScreen: View {
 
     var body: some View {
         ZStack {
-            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, trackingMode: trackingMode, reset: reset, zoom: zoom, onZoom: adjustZoom)
+            VideoSurface(frames: presentation.engine, onError: { playback.setError($0) }, rightEye: rightEye, trackingEnabled: trackingEnabled, reset: reset, zoom: zoom, onZoom: adjustZoom)
             if state.currentURL == nil {
                 Text("VR180 동영상이나 폴더를 이 창에 끌어다 놓으세요.")
                     .foregroundStyle(.white).allowsHitTesting(false)
@@ -219,12 +219,12 @@ struct PlayerScreen: View {
                     }.help("플레이리스트")
                 }
                 Spacer()
-                Button { trackingMode = trackingMode.next } label: {
-                    Label(trackingMode.label, systemImage: trackingMode.symbol)
+                Toggle(isOn: $trackingEnabled) {
+                    Label("얼굴 추적", systemImage: "viewfinder")
                 }
+                .toggleStyle(.button)
                 .labelStyle(.iconOnly)
-                .accessibilityValue(trackingMode.label)
-                .help("\(trackingMode.label) → \(trackingMode.next.label)")
+                .help(trackingEnabled ? "얼굴 추적 켜짐 · 얼굴을 클릭해 추적하고 다시 클릭해 중지" : "얼굴 추적 꺼짐")
                 HStack(spacing: 2) {
                     eyeButton(right: false)
                     eyeButton(right: true)

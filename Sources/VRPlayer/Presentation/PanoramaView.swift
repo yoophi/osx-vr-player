@@ -12,7 +12,7 @@ struct VideoSurface: NSViewRepresentable {
     let frames: VideoFrameSource
     let onError: (String) -> Void
     let rightEye: Bool
-    let trackingMode: TrackingMode
+    let trackingEnabled: Bool
     let reset: Int
     let zoom: Double
     let onZoom: (Double) -> Void
@@ -23,7 +23,7 @@ struct VideoSurface: NSViewRepresentable {
         if view.rightEye != rightEye || view.reset != reset {
             view.faceOverlay.reset()
         }
-        view.trackingMode = trackingMode
+        view.trackingEnabled = trackingEnabled
         view.rightEye = rightEye
         if view.reset != reset {
             view.angles = .zero
@@ -39,9 +39,12 @@ final class PanoramaView: MTKView {
     var onZoom: ((Double) -> Void)?
     var reset = 0
     var rightEye = false
-    var trackingMode = TrackingMode.off {
+    var trackingEnabled = false {
         didSet {
-            if trackingMode == .off && oldValue != .off { faceOverlay.reset() }
+            if oldValue && !trackingEnabled {
+                faceOverlay.reset()
+                hoveredFace = nil
+            }
         }
     }
     private var displayedTime = 0.0
@@ -84,21 +87,60 @@ final class PanoramaView: MTKView {
         onZoom?(direction * steps)
     }
 
+    private var hoverArea: NSTrackingArea?
+    private var pointerLocation: CGPoint?
+    private var hoveredFace: CGRect?
+    private var outlineUntil = 0.0
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeAlways, .mouseEnteredAndExited, .mouseMoved],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
+
+    override func mouseMoved(with event: NSEvent) {
+        pointerLocation = convert(event.locationInWindow, from: nil)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        pointerLocation = nil
+        hoveredFace = nil
+    }
+
+    private func eyePoint(at location: CGPoint) -> CGPoint? {
+        guard bounds.width > 0, bounds.height > 0, bounds.contains(location) else { return nil }
+        let x = Float(2 * (location.x - bounds.minX) / bounds.width - 1)
+        let y = Float(2 * (location.y - bounds.minY) / bounds.height - 1)
+        return PanoramaProjection.eyePoint(screen: SIMD2(x, isFlipped ? -y : y),
+                                           aspect: Float(bounds.width / bounds.height), zoom: zoom, angles: angles)
+    }
+
+    private func outline(at time: Double) -> SIMD4<Float> {
+        guard trackingEnabled, let pointerLocation,
+              let point = eyePoint(at: pointerLocation), let box = faceOverlay.face(at: point) else {
+            hoveredFace = nil
+            return .zero
+        }
+        if hoveredFace?.intersects(box) != true { outlineUntil = time + 1.2 }
+        hoveredFace = box
+        guard time < outlineUntil else { return .zero }
+        return SIMD4(Float(box.minX), Float(box.minY), Float(box.maxX), Float(box.maxY))
+    }
+
     override func mouseDown(with event: NSEvent) { dragged = false }
 
     override func mouseUp(with event: NSEvent) {
-        guard trackingMode != .off, !dragged, bounds.width > 0, bounds.height > 0 else { return }
-        let location = convert(event.locationInWindow, from: nil)
-        let x = Float(2 * (location.x - bounds.minX) / bounds.width - 1)
-        let y = Float(2 * (location.y - bounds.minY) / bounds.height - 1)
-        if let point = PanoramaProjection.eyePoint(screen: SIMD2(x, isFlipped ? -y : y),
-                                aspect: Float(bounds.width / bounds.height), zoom: zoom, angles: angles) {
-            faceOverlay.select(at: point, allowRegion: trackingMode == .hidden)
-        }
+        guard trackingEnabled, !dragged else { return }
+        faceOverlay.toggleSelection(at: eyePoint(at: convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if !dragged && trackingMode != .off { faceOverlay.reset() }
+        if !dragged && trackingEnabled { faceOverlay.reset() }
         dragged = true
         let scale = Float.pi / Float(max(bounds.height, 1)) * 0.5 / zoom
         angles.x = max(-.pi/2, min(.pi/2, angles.x - Float(event.deltaX) * scale))
@@ -131,7 +173,7 @@ final class PanoramaView: MTKView {
         let now = CACurrentMediaTime()
         let elapsed = now - lastDrawTime
         lastDrawTime = now
-        if trackingMode != .off, let displayedBuffer {
+        if trackingEnabled, let displayedBuffer {
             faceOverlay.update(buffer: displayedBuffer, frame: frameNumber, time: displayedTime, rightEye: rightEye)
             if let box = faceOverlay.tracked {
                 angles = PanoramaProjection.follow(from: angles, toward: PanoramaProjection.angles(centeredOn: box), elapsed: elapsed)
@@ -146,11 +188,8 @@ final class PanoramaView: MTKView {
             encoder.setFragmentBytes(&params, length: MemoryLayout.size(ofValue: params), index: 0)
             var focalLength = zoom
             encoder.setFragmentBytes(&focalLength, length: MemoryLayout<Float>.size, index: 1)
-            var faceCounts = trackingMode == .outlines ? faceOverlay.counts : SIMD2<UInt32>(0, .max)
-            faceOverlay.rectangles.withUnsafeBufferPointer {
-                encoder.setFragmentBytes($0.baseAddress!, length: $0.count * MemoryLayout<SIMD4<Float>>.stride, index: 2)
-            }
-            encoder.setFragmentBytes(&faceCounts, length: MemoryLayout.size(ofValue: faceCounts), index: 3)
+            var hoverBox = outline(at: now)
+            encoder.setFragmentBytes(&hoverBox, length: MemoryLayout.size(ofValue: hoverBox), index: 2)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             command.addCompletedHandler { _ in withExtendedLifetime(frameTexture) {} }
         }
@@ -173,7 +212,7 @@ final class PanoramaView: MTKView {
     }
     fragment float4 panorama(Vertex v [[stage_in]], texture2d<float> frame [[texture(0)]],
                              constant float4 &params [[buffer(0)]], constant float &zoom [[buffer(1)]],
-                             constant float4 *boxes [[buffer(2)]], constant uint2 &counts [[buffer(3)]]) {
+                             constant float4 &box [[buffer(2)]]) {
         float3 d = normalize(float3(v.screen.x * params.z, v.screen.y, zoom));
         float cp = cos(params.y), sp = sin(params.y);
         d.yz = float2(cp*d.y + sp*d.z, -sp*d.y + cp*d.z);
@@ -187,12 +226,10 @@ final class PanoramaView: MTKView {
         float4 color = frame.sample(s, uv);
         float2 point = float2(u, 1 - uv.y);
         float2 pixel = max(fwidth(point), float2(0.00001));
-        for (uint i = 0; i < counts.x; ++i) {
-            float4 box = boxes[i];
+        if (box.z > box.x) {
             float2 edge = min(point - box.xy, box.zw - point) / pixel;
             if (all(edge >= 0) && min(edge.x, edge.y) <= 2) {
-                float3 tint = i == counts.y ? float3(0.2, 1, 0.35) : float3(0, 0.85, 1);
-                color.rgb = mix(color.rgb, tint, 0.9);
+                color.rgb = mix(color.rgb, float3(0.1, 0.5, 1), 0.95);
             }
         }
         return color;

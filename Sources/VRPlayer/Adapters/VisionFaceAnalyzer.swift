@@ -8,13 +8,11 @@ struct FaceAnalysis {
     let image: CGImage
     let faces: [CGRect]
     let tracked: CGRect?
+    let hasSelection: Bool
 }
 
 /// A sequence belongs to one eye of one movie. Its methods run on the analysis queue.
 final class VisionFaceAnalyzer {
-    private let sequence = VNSequenceRequestHandler()
-    private var tracker: VNTrackObjectRequest?
-
     private var face: FaceAssociation?
 
     // A small RGB patch from the inner face, used only while following this selection.
@@ -34,19 +32,8 @@ final class VisionFaceAnalyzer {
         }
     }
 
-    func select(_ box: CGRect, in frame: FaceAnalysis, isFace: Bool) throws {
-        if isFace {
-            face = FaceAssociation(box: box, time: frame.time, appearance: appearance(box, in: frame.image))
-            return
-        }
-        let image = frame.image
-        let request = VNTrackObjectRequest(detectedObjectObservation: VNDetectedObjectObservation(boundingBox: box))
-        request.trackingLevel = .accurate
-        try sequence.perform([request], on: image)
-        if let found = request.results?.first as? VNDetectedObjectObservation {
-            request.inputObservation = found
-            tracker = request
-        }
+    func select(_ box: CGRect, in frame: FaceAnalysis) {
+        face = FaceAssociation(box: box, time: frame.time, appearance: appearance(box, in: frame.image))
     }
 
     func analyze(_ buffer: CVPixelBuffer, rightEye: Bool, time: Double, context: CIContext) throws -> FaceAnalysis {
@@ -67,15 +54,7 @@ final class VisionFaceAnalyzer {
         if var selected = face {
             tracked = selected.match(boxes, at: time) { appearance($0, in: image) }
             face = selected.expired(at: time) ? nil : selected
-        } else if let tracker {
-            try sequence.perform([tracker], on: image)
-            if let found = tracker.results?.first as? VNDetectedObjectObservation, found.confidence >= 0.55 {
-                tracker.inputObservation = found
-                tracked = found.boundingBox
-            } else {
-                self.tracker = nil
-            }
         }
-        return FaceAnalysis(time: time, image: image, faces: boxes, tracked: tracked)
+        return FaceAnalysis(time: time, image: image, faces: boxes, tracked: tracked, hasSelection: face != nil)
     }
 }

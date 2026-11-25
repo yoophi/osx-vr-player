@@ -8,7 +8,7 @@ final class FaceOverlay {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private var analyzer = VisionFaceAnalyzer()
     private var analysis: FaceAnalysis?
-    private var selection: (box: CGRect, frame: FaceAnalysis, isFace: Bool)?
+    private var selection: (box: CGRect, frame: FaceAnalysis)?
     private var busy = false
     private var generation = 0
     private var lastFrame: UInt64?
@@ -16,16 +16,10 @@ final class FaceOverlay {
     private(set) var tracked: CGRect?
     var faces: [CGRect] { analysis?.faces ?? [] }
 
-    // Metal requires a bound buffer even when the shader has no outlines to draw.
-    private(set) var rectangles: [SIMD4<Float>] = [.zero]
-    private(set) var counts = SIMD2<UInt32>(0, .max)
+    private(set) var hasSelection = false
 
-    private func updateOutlines() {
-        var boxes = faces
-        if let tracked { boxes.append(tracked) }
-        counts = SIMD2(UInt32(boxes.count), tracked == nil ? .max : UInt32(boxes.count - 1))
-        rectangles = boxes.map { SIMD4(Float($0.minX), Float($0.minY), Float($0.maxX), Float($0.maxY)) }
-        if rectangles.isEmpty { rectangles.append(.zero) }
+    func face(at point: CGPoint) -> CGRect? {
+        faces.filter { $0.contains(point) }.min { $0.width * $0.height < $1.width * $1.height }
     }
 
     func reset() {
@@ -34,24 +28,22 @@ final class FaceOverlay {
         selection = nil
         analysis = nil
         tracked = nil
-        updateOutlines()
+        hasSelection = false
         nextUpdate = 0
         lastFrame = nil
     }
 
-    func select(at point: CGPoint, allowRegion: Bool) {
-        guard let analysis else { return }
-        let face = faces.filter({ $0.contains(point) }).min(by: {
-            $0.width * $0.height < $1.width * $1.height
-        })
-        guard face != nil || allowRegion else { return }
-        let box = face ?? CGRect(x: min(0.92, max(0, point.x - 0.04)),
-                                 y: min(0.92, max(0, point.y - 0.04)), width: 0.08, height: 0.08)
+    func toggleSelection(at point: CGPoint?) {
+        if hasSelection {
+            reset()
+            return
+        }
+        guard let point, let analysis, let box = face(at: point) else { return }
         generation &+= 1
         analyzer = VisionFaceAnalyzer()
-        selection = (box, analysis, face != nil)
+        selection = (box, analysis)
         tracked = box
-        updateOutlines()
+        hasSelection = true
         nextUpdate = 0
         lastFrame = nil
     }
@@ -67,7 +59,7 @@ final class FaceOverlay {
         queue.async { [weak self, analyzer, generation, context] in
             let result: FaceAnalysis?
             do {
-                if let seed { try analyzer.select(seed.box, in: seed.frame, isFace: seed.isFace) }
+                if let seed { analyzer.select(seed.box, in: seed.frame) }
                 result = try analyzer.analyze(buffer, rightEye: rightEye, time: time, context: context)
             } catch { result = nil }
             DispatchQueue.main.async {
@@ -76,8 +68,7 @@ final class FaceOverlay {
                 guard self.generation == generation else { return }
                 self.analysis = result
                 self.tracked = result?.tracked
-                self.updateOutlines()
-
+                if let result { self.hasSelection = result.hasSelection }
             }
         }
     }
